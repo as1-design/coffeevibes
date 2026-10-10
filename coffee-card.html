@@ -40,6 +40,12 @@ button{cursor:pointer}
 .iconbtn{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center}
 .iconbtn svg{width:18px;height:18px;fill:var(--fg)}
 .banner{background:var(--accent-soft);border-radius:12px;padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:14px}
+.savebar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:13.5px;color:var(--muted);padding:0 2px}
+.savebar button{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:99px;padding:6px 14px;font-weight:600;font-size:13px}
+.savebar.warn{color:var(--fg)}
+.savebar.warn button{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.filebtn{position:relative;overflow:hidden;display:block;text-align:center}
+.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .banner button{border:0;background:none;color:var(--accent);font-weight:600;padding:4px 0}
 
 /* card */
@@ -181,6 +187,11 @@ h2{font-family:var(--f-display);font-weight:700;font-size:19px;margin:0;letter-s
     </button>
   </header>
 
+  <div id="saveBar" class="savebar" hidden>
+    <span id="saveMsg"></span>
+    <button id="saveNow">Save file</button>
+  </div>
+
   <div id="exampleBanner" class="banner" hidden>
     <span>These are example numbers.</span>
     <button id="clearExample">Clear and start my own</button>
@@ -286,7 +297,36 @@ function parseAmount(str){
 
 function fresh(){return {v:1,name:'My coffee card',goals:[],tx:[],example:false}}
 function load(){try{const r=localStorage.getItem(KEY);if(r){const o=JSON.parse(r);if(o&&o.v===1&&Array.isArray(o.tx))return o}}catch(e){}return fresh()}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function save(){S.changedAt=Date.now();store()}
+function store(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+
+/* ---------- JSON file on the phone ---------- */
+function saveFile(){
+  const out=Object.assign({},S);delete out.example;
+  S.savedAt=Date.now();out.savedAt=S.savedAt;store();
+  const blob=new Blob([JSON.stringify(out,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='coffee-card-'+today()+'.json';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+  renderSaveBar();toast('Saved as '+a.download);
+}
+function readFile(file,done){
+  const r=new FileReader();
+  r.onload=()=>{try{const o=JSON.parse(r.result);if(!o||o.v!==1||!Array.isArray(o.tx)||!Array.isArray(o.goals))throw 0;done(o)}catch(e){done(null)}};
+  r.onerror=()=>done(null);
+  r.readAsText(file);
+}
+function renderSaveBar(){
+  const bar=$('saveBar');
+  if(S.example||!S.tx.length&&!S.goals.length){bar.hidden=true;return}
+  bar.hidden=false;
+  const unsaved=!S.savedAt||(S.changedAt||0)>S.savedAt;
+  bar.classList.toggle('warn',unsaved);
+  $('saveMsg').textContent=!S.savedAt?'Not saved to a file yet.'
+    :unsaved?'You have changes since your last file save.'
+    :'Saved to file on '+new Date(S.savedAt).toLocaleDateString(undefined,{day:'numeric',month:'short'})+'.';
+}
 let S=load();
 
 function calc(){
@@ -361,6 +401,7 @@ function render(opts){
 
   renderGoals(c);
   renderHistory();
+  renderSaveBar();
 }
 
 function renderGoals(c){
@@ -564,42 +605,39 @@ function sheetLevels(){
 }
 
 function sheetSettings(){
-  openSheet('<h3>Settings</h3><p class="lead">Everything is stored only in this browser on this phone. Nothing is sent anywhere.</p>'+
+  openSheet('<h3>Settings</h3><p class="lead">Your numbers stay on this phone. Nothing is sent anywhere.</p>'+
     '<div class="stack">'+
     '<label class="field"><span>Name on the card</span><input id="s-name" maxlength="28" value="'+esc(S.name||'')+'"></label>'+
     '<div class="divider"></div>'+
-    '<h3 style="font-size:17px">Backup</h3><p class="hint">If the browser data gets cleared, your numbers go with it. Copy this code now and then and keep it in your notes app. Paste it below to bring everything back.</p>'+
-    '<button class="btn ghost" id="s-show">Show my backup code</button>'+
-    '<div id="s-code" hidden class="stack"><label class="field"><span>Your backup code</span><textarea id="s-out" readonly></textarea></label><button class="btn" id="s-copy">Copy code</button></div>'+
-    '<label class="field"><span>Restore from a code</span><textarea id="s-in" placeholder="Paste a backup code here"></textarea></label>'+
-    '<button class="btn ghost" id="s-restore">Restore</button><p class="err" id="s-err" hidden></p>'+
+    '<h3 style="font-size:17px">Save file</h3><p class="hint">Saves all your numbers as a .json file in your phone’s Downloads. Load the newest file to bring everything back, on this phone or a new one.</p>'+
+    '<button class="btn" id="s-save">Save to a file</button>'+
+    '<label class="btn ghost filebtn" id="s-loadlbl">Load from a file<input type="file" id="s-file" accept=".json,application/json"></label>'+
+    '<button class="btn danger sure" id="s-restore" hidden>Replace my numbers with this file</button>'+
+    '<p class="hint" id="s-info" hidden></p><p class="err" id="s-err" hidden></p>'+
     '<div class="divider"></div>'+
     '<button class="btn danger" id="s-reset">Erase everything</button>'+
     '</div>',()=>{
       $('s-name').addEventListener('input',e=>{S.name=e.target.value;save();$('cardName').textContent=S.name||'My coffee card'});
-      $('s-show').addEventListener('click',()=>{
-        $('s-out').value='COFFEECARD1:'+btoa(unescape(encodeURIComponent(JSON.stringify(S))));
-        $('s-code').hidden=false;
-      });
-      $('s-copy').addEventListener('click',()=>{
-        const ta=$('s-out');
-        const fallback=()=>{ta.focus();ta.select();toast('Selected. Use your phone’s Copy.')};
-        try{navigator.clipboard.writeText(ta.value).then(()=>toast('Backup code copied'),fallback)}catch(e){fallback()}
-      });
-      const rb=$('s-restore'),er=$('s-err');
+      $('s-save').addEventListener('click',saveFile);
+      const rb=$('s-restore'),er=$('s-err'),info=$('s-info');
       let parsed=null;
+      $('s-file').addEventListener('change',e=>{
+        const f=e.target.files&&e.target.files[0];
+        er.hidden=true;info.hidden=true;rb.hidden=true;parsed=null;
+        if(!f)return;
+        readFile(f,o=>{
+          e.target.value='';
+          if(!o){er.textContent='That file isn’t a Coffee Card save. Pick a file named coffee-card-…json.';er.hidden=false;return}
+          parsed=o;
+          const n=o.tx.length,when=o.savedAt?new Date(o.savedAt).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):'an unknown date';
+          info.textContent=f.name+': saved '+when+', '+n+' entr'+(n===1?'y':'ies')+'. Loading it replaces what’s on the card now.';
+          info.hidden=false;rb.hidden=false;
+        });
+      });
       rb.addEventListener('click',()=>{
-        er.hidden=true;
-        if(!parsed){
-          try{
-            const raw=$('s-in').value.trim().replace(/^COFFEECARD1:/,'');
-            const o=JSON.parse(decodeURIComponent(escape(atob(raw))));
-            if(!o||o.v!==1||!Array.isArray(o.tx))throw 0;
-            parsed=o;rb.textContent='Tap again to replace current numbers';rb.classList.add('danger','sure');
-          }catch(e){er.textContent='That code doesn’t look right. Paste the whole code, starting with COFFEECARD1.';er.hidden=false}
-          return;
-        }
-        S=parsed;save();closeSheet();render({instant:true});toast('Backup restored');
+        if(!parsed)return;
+        S=parsed;S.example=false;S.changedAt=S.savedAt=Date.now();store();
+        closeSheet();render({instant:true});toast('File loaded');
       });
       const rs=$('s-reset');
       rs.addEventListener('click',()=>{
@@ -649,6 +687,7 @@ document.addEventListener('click',e=>{
 $('newGoal').addEventListener('click',()=>sheetGoal());
 $('levelsBtn').addEventListener('click',sheetLevels);
 $('settingsBtn').addEventListener('click',sheetSettings);
+$('saveNow').addEventListener('click',saveFile);
 $('clearExample').addEventListener('click',()=>{S=fresh();save();render({instant:true});toast('Ready for your own numbers')});
 
 render({instant:true});
